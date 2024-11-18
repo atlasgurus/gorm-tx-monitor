@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/stretchr/testify/suite"
 	"log"
 	"os"
 	"sync"
@@ -9,8 +10,7 @@ import (
 	"time"
 
 	"github.com/jinzhu/gorm"
-	_ "github.com/jinzhu/gorm/dialects/mysql"
-	"github.com/stretchr/testify/suite"
+	_ "gorm-tx-monitor/driver"
 )
 
 type TxTestSuite struct {
@@ -34,7 +34,7 @@ func (ts *TxTestSuite) SetupSuite() {
 
 	log.Println("Opening database connection")
 	var err error
-	ts.db, err = gorm.Open("mysql", dsn)
+	ts.db, err = gorm.Open("mysqlWrapper", dsn)
 	ts.Require().NoError(err)
 
 	// Enable GORM logging
@@ -112,6 +112,35 @@ func (ts *TxTestSuite) TestOperationsInsideTransaction() {
 	ts.Require().NoError(tx.Error)
 
 	err = tx.Create(&User{Name: "Test User 2"}).Error
+	ts.Require().NoError(err)
+
+	var user2 User
+	err = tx.First(&user2).Error
+	ts.Require().NoError(err)
+
+	err = tx.Commit().Error
+	ts.Require().NoError(err)
+
+	ts.Require().Equal(2, callbackCalls)
+}
+
+func (ts *TxTestSuite) TestUpdateInsideTransaction() {
+
+	err := ts.db.Create(&User{Name: "Test User 2"}).Error
+	ts.Require().NoError(err)
+
+	callbackCalls := 0
+	err = RegisterTxMonitor(ts.db, func(operation, sql string, duration time.Duration, tmi *TransactionMonitorInfo, err error) {
+		ts.Require().NoError(err)
+		ts.Require().Equal("query", operation)
+		ts.Require().NotZero(duration)
+		callbackCalls++
+	})
+	ts.Require().NoError(err)
+	tx := ts.db.Begin()
+	ts.Require().NoError(tx.Error)
+
+	err = tx.Select("Name").Model(&User{}).Where("name = ?", "Test User 2").Update("Name", "Test User 3").Error
 	ts.Require().NoError(err)
 
 	var user2 User
